@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body, #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #030712;
+    color: #f3f4f6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* Cyberpunk scanlines and subtle vignette */
+.cyber-vignette {
+  background: radial-gradient(circle at center, transparent 40%, rgba(3, 7, 18, 0.75) 100%);
+  pointer-events: none;
+}
+
+.speed-lines {
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(6, 182, 212, 0.15) 100%);
+  pointer-events: none;
+}

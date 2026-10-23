@@ -1,0 +1,8 @@
+{
+  "name": "NEON RUN: 2099",
+  "description": "High-octane 3D cyberpunk midnight highway racer with realistic lighting, responsive arcade handling, traffic weaving, and cockpit/chase cameras.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
