@@ -253,7 +253,7 @@ Before presenting the game to judges, verify:
 
 ## 👥 Team
 
-Created by: **[Add your team name and members]**
+Created by: **[Innovexa]**
 
 Gamathon project: **NEON RUN: 2099**
 
