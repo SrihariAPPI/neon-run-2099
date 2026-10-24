@@ -11,31 +11,7 @@ class SoundSystem {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private sfxGain: GainNode | null = null;
-  private engineGain: GainNode | null = null;
   private musicGain: GainNode | null = null;
-
-  // Real Audio Engine Sample Cache & Playback Nodes
-  private realEngineBuffers: Map<string, AudioBuffer> = new Map();
-  private realEngineSource: AudioBufferSourceNode | null = null;
-  private realEngineGain: GainNode | null = null;
-  private realEngineFilter: BiquadFilterNode | null = null;
-  private currentCarId = 'kairo-s1';
-  private samplesLoading = false;
-  private engineActive = false;
-
-  // Engine Synthesis Nodes (Layered for sub-bass and mechanical rumble)
-  private engineCylinderOsc: OscillatorNode | null = null;
-  private engineHarmonicOsc: OscillatorNode | null = null;
-  private engineSubOsc: OscillatorNode | null = null;
-  private engineNoiseNode: AudioBufferSourceNode | null = null;
-  private engineNoiseGain: GainNode | null = null;
-  private engineFilter: BiquadFilterNode | null = null;
-  private engineDistortion: WaveShaperNode | null = null;
-
-  // Turbocharger Nodes
-  private turboOsc: OscillatorNode | null = null;
-  private turboGain: GainNode | null = null;
-  private turboFilter: BiquadFilterNode | null = null;
 
   // Music loop state
   private musicInterval: number | null = null;
@@ -44,14 +20,6 @@ class SoundSystem {
 
   private isMuted = false;
   private initialized = false;
-
-  // Rev limiter state
-  private limiterActive = false;
-  private limiterCounter = 0;
-
-  // Previous throttle state to detect turbo blow-off release
-  private prevThrottle = 0;
-  private boostPressure = 0;
 
   public init() {
     if (this.initialized && this.ctx) {
@@ -75,20 +43,10 @@ class SoundSystem {
       this.sfxGain.gain.setValueAtTime(0.85, this.ctx.currentTime);
       this.sfxGain.connect(this.masterGain);
 
-      // Engine bus
-      this.engineGain = this.ctx.createGain();
-      this.engineGain.gain.setValueAtTime(0.0, this.ctx.currentTime); // silent until run begins
-      this.engineGain.connect(this.masterGain);
-
       // Music bus
       this.musicGain = this.ctx.createGain();
       this.musicGain.gain.setValueAtTime(0.35, this.ctx.currentTime);
       this.musicGain.connect(this.masterGain);
-
-      this.setupRealEngineNodes();
-      this.setupEngineSynth();
-      this.setupTurboSynth();
-      this.loadRealAudioSamples();
 
       this.initialized = true;
     } catch {
@@ -97,529 +55,38 @@ class SoundSystem {
   }
 
   /**
-   * Configures dedicated Web Audio routing for the real sports car engine samples
+   * Car sound fully disabled per user request
    */
-  private setupRealEngineNodes() {
-    if (!this.ctx || !this.engineGain) return;
-
-    this.realEngineFilter = this.ctx.createBiquadFilter();
-    this.realEngineFilter.type = 'lowpass';
-    this.realEngineFilter.frequency.setValueAtTime(600, this.ctx.currentTime);
-    this.realEngineFilter.Q.setValueAtTime(1.8, this.ctx.currentTime);
-
-    this.realEngineGain = this.ctx.createGain();
-    this.realEngineGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
-
-    this.realEngineFilter.connect(this.realEngineGain);
-    this.realEngineGain.connect(this.engineGain);
+  public startRealEngine(_carId?: string) {
+    // Car sound fully removed
   }
 
-  /**
-   * Asynchronously loads and decodes genuine supercar engine recordings
-   * Stored locally in /audio to guarantee 0 offline latency and 0 404s
-   */
-  public async loadRealAudioSamples() {
-    if (this.samplesLoading || !this.ctx) return;
-    this.samplesLoading = true;
-
-    const sampleDefinitions: Record<string, string> = {
-      ferrari: '/audio/engine_ferrari.ogg',
-      maserati: '/audio/engine_maserati.ogg',
-      mclaren: '/audio/engine_mclaren.ogg',
-    };
-
-    for (const [key, url] of Object.entries(sampleDefinitions)) {
-      if (this.realEngineBuffers.has(key)) continue;
-
-      try {
-        const response = await fetch(url);
-        if (!response.ok) continue;
-        const arrayBuffer = await response.arrayBuffer();
-        if (!this.ctx) break;
-        const decodedBuffer = await this.ctx.decodeAudioData(arrayBuffer);
-        this.realEngineBuffers.set(key, decodedBuffer);
-
-        // If the engine is currently active and this sample matches the current car, start it immediately
-        if (this.engineActive && this.getSampleKeyForCar(this.currentCarId) === key && !this.realEngineSource) {
-          this.startRealEngineSource(this.currentCarId);
-        }
-      } catch {
-        // Fallback gracefully to procedural synth
-      }
-    }
-  }
-
-  private getSampleKeyForCar(carId: string): string {
-    switch (carId) {
-      case 'razor-v8':
-        return 'maserati';
-      case 'phantom-x':
-        return 'mclaren';
-      case 'vanta-gt':
-      case 'kairo-s1':
-      default:
-        return 'ferrari';
-    }
-  }
-
-  /**
-   * Starts playback of the real supercar engine sample for the given car
-   */
-  public startRealEngine(carId: string = 'kairo-s1') {
-    this.currentCarId = carId;
-    this.engineActive = true;
-    if (!this.ctx) {
-      this.init();
-    }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
-    }
-    this.startRealEngineSource(carId);
-  }
-
-  private startRealEngineSource(carId: string) {
-    if (!this.ctx || !this.realEngineFilter) return;
-
-    // Stop existing real audio source if running
-    if (this.realEngineSource) {
-      try {
-        this.realEngineSource.stop();
-        this.realEngineSource.disconnect();
-      } catch {
-        // Source might have already stopped
-      }
-      this.realEngineSource = null;
-    }
-
-    const sampleKey = this.getSampleKeyForCar(carId);
-    let buffer = this.realEngineBuffers.get(sampleKey);
-    // If exact buffer not loaded yet, try any available buffer as immediate fallback
-    if (!buffer) {
-      buffer = this.realEngineBuffers.get('ferrari') || this.realEngineBuffers.get('maserati') || this.realEngineBuffers.get('mclaren');
-    }
-
-    if (buffer) {
-      const source = this.ctx.createBufferSource();
-      source.buffer = buffer;
-      source.loop = true;
-      source.playbackRate.setValueAtTime(0.65, this.ctx.currentTime);
-      source.connect(this.realEngineFilter);
-      source.start(this.ctx.currentTime);
-      this.realEngineSource = source;
-    }
-  }
-
-  /**
-   * Builds an analog-style saturation curve for realistic exhaust rasp
-   */
-  private makeDistortionCurve(amount = 20): Float32Array {
-    const k = amount;
-    const nSamples = 44100;
-    const curve = new Float32Array(nSamples);
-    const deg = Math.PI / 180;
-    for (let i = 0; i < nSamples; i++) {
-      const x = (i * 2) / nSamples - 1;
-      curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
-    }
-    return curve;
-  }
-
-  private setupEngineSynth() {
-    if (!this.ctx || !this.engineGain) return;
-
-    // 1. Primary cylinder firing pulse oscillator (Sawtooth)
-    this.engineCylinderOsc = this.ctx.createOscillator();
-    this.engineCylinderOsc.type = 'sawtooth';
-    this.engineCylinderOsc.frequency.setValueAtTime(45, this.ctx.currentTime);
-
-    // 2. Harmonic secondary oscillator (Triangle with subtle detuning)
-    this.engineHarmonicOsc = this.ctx.createOscillator();
-    this.engineHarmonicOsc.type = 'triangle';
-    this.engineHarmonicOsc.frequency.setValueAtTime(90, this.ctx.currentTime);
-
-    // 3. Sub-bass rumble oscillator (Sine)
-    this.engineSubOsc = this.ctx.createOscillator();
-    this.engineSubOsc.type = 'sine';
-    this.engineSubOsc.frequency.setValueAtTime(22.5, this.ctx.currentTime);
-
-    // 4. Exhaust / intake air rumble noise generator
-    const bufferSize = this.ctx.sampleRate * 2;
-    const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const output = noiseBuffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      output[i] = (Math.random() * 2 - 1) * 0.2;
-    }
-    this.engineNoiseNode = this.ctx.createBufferSource();
-    this.engineNoiseNode.buffer = noiseBuffer;
-    this.engineNoiseNode.loop = true;
-
-    this.engineNoiseGain = this.ctx.createGain();
-    this.engineNoiseGain.gain.setValueAtTime(0.04, this.ctx.currentTime);
-
-    // 5. Saturation distortion
-    this.engineDistortion = this.ctx.createWaveShaper();
-    this.engineDistortion.curve = this.makeDistortionCurve(18) as unknown as Float32Array<ArrayBuffer>;
-    this.engineDistortion.oversample = '2x';
-
-    // 6. Dynamic resonant lowpass filter
-    this.engineFilter = this.ctx.createBiquadFilter();
-    this.engineFilter.type = 'lowpass';
-    this.engineFilter.frequency.setValueAtTime(320, this.ctx.currentTime);
-    this.engineFilter.Q.setValueAtTime(2.5, this.ctx.currentTime);
-
-    // Routing: Oscillators -> Distortion -> Dynamic Filter -> Engine Gain
-    this.engineCylinderOsc.connect(this.engineDistortion);
-    this.engineHarmonicOsc.connect(this.engineDistortion);
-    this.engineSubOsc.connect(this.engineGain); // clean punchy sub bypasses distortion
-
-    this.engineNoiseNode.connect(this.engineNoiseGain);
-    this.engineNoiseGain.connect(this.engineDistortion);
-
-    this.engineDistortion.connect(this.engineFilter);
-    this.engineFilter.connect(this.engineGain);
-
-    this.engineCylinderOsc.start();
-    this.engineHarmonicOsc.start();
-    this.engineSubOsc.start();
-    this.engineNoiseNode.start();
-  }
-
-  private setupTurboSynth() {
-    if (!this.ctx || !this.engineGain) return;
-
-    // High-pitched turbo turbine whistle
-    this.turboOsc = this.ctx.createOscillator();
-    this.turboOsc.type = 'sine';
-    this.turboOsc.frequency.setValueAtTime(1400, this.ctx.currentTime);
-
-    this.turboFilter = this.ctx.createBiquadFilter();
-    this.turboFilter.type = 'bandpass';
-    this.turboFilter.frequency.setValueAtTime(2800, this.ctx.currentTime);
-    this.turboFilter.Q.setValueAtTime(4.0, this.ctx.currentTime);
-
-    this.turboGain = this.ctx.createGain();
-    this.turboGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
-
-    this.turboOsc.connect(this.turboFilter);
-    this.turboFilter.connect(this.turboGain);
-    this.turboGain.connect(this.engineGain);
-
-    this.turboOsc.start();
-  }
-
-  /**
-   * Updates the engine audio in real-time based on RPM, Gear, Throttle, and Brake.
-   * Scales real engine sample playback rate, cylinder firing frequency, harmonic richness,
-   * intake filter sweep, and turbo whistle.
-   */
   public updateEngine(
-    speedKmH: number,
-    gear: number,
-    rpmNormalized: number,
-    actualRpm: number,
-    throttle: number,
-    brake: number,
-    isShifting: boolean
+    _speedKmH: number,
+    _gear: number,
+    _rpmNormalized: number,
+    _actualRpm: number,
+    _throttle: number,
+    _brake: number,
+    _isShifting: boolean
   ) {
-    if (
-      !this.ctx ||
-      !this.engineGain ||
-      !this.engineCylinderOsc ||
-      !this.engineHarmonicOsc ||
-      !this.engineSubOsc ||
-      !this.engineFilter ||
-      !this.engineNoiseGain ||
-      !this.turboGain ||
-      !this.turboOsc
-    ) {
-      return;
-    }
-
-    const t = this.ctx.currentTime;
-
-    // During gear shift (clutch disengaged / ignition cut), drop engine volume momentarily
-    if (isShifting) {
-      this.engineGain.gain.setTargetAtTime(0.08, t, 0.02);
-      if (this.realEngineGain) {
-        this.realEngineGain.gain.setTargetAtTime(0.05, t, 0.02);
-      }
-      return;
-    }
-
-    // Cylinder firing frequency calculation:
-    // A high-revving 6-cylinder engine fires 3 times per revolution:
-    // Fundamental Hz = (RPM / 60) * 3
-    // At 1000 RPM: 50 Hz. At 4000 RPM: 200 Hz. At 8500 RPM: 425 Hz.
-    const cylinders = 6;
-    const baseCylinderFreq = (actualRpm / 60) * (cylinders / 2);
-
-    // Apply rev limiter bounce if hovering near redline (e.g. > 8400 RPM)
-    let limiterAttenuation = 1.0;
-    if (rpmNormalized >= 0.96 && throttle > 0.8) {
-      this.limiterCounter++;
-      // High-speed ignition cut flutter ("tut-tut-tut")
-      if (this.limiterCounter % 4 < 2) {
-        limiterAttenuation = 0.22;
-      }
-    }
-
-    // 1. Dynamic modulation of authentic real supercar engine recording
-    if (this.realEngineSource && this.realEngineGain && this.realEngineFilter) {
-      // Scale pitch cleanly across the entire RPM rev range:
-      // 950 RPM idle -> 0.60x pitch
-      // 4500 RPM mid-range -> ~1.05x pitch
-      // 8500 RPM redline -> ~1.58x pitch
-      const rpmRatio = Math.max(0, Math.min(1.0, (actualRpm - 950) / (8500 - 950)));
-      const targetRate = 0.60 + rpmRatio * 0.98;
-
-      // Dynamic resonant intake/exhaust opening:
-      // Low RPM idle: muffled lowpass at 500 Hz
-      // High throttle / screaming RPM: opens up to 5500 Hz
-      const realCutoff = Math.max(
-        350,
-        500 + rpmRatio * 3800 + throttle * 1200 - brake * 180
-      );
-
-      // Real engine volume envelope
-      const realVol = Math.min(
-        0.85,
-        (0.32 + rpmRatio * 0.38 + throttle * 0.22) * limiterAttenuation
-      );
-
-      this.realEngineSource.playbackRate.setTargetAtTime(targetRate, t, 0.035);
-      this.realEngineFilter.frequency.setTargetAtTime(realCutoff, t, 0.04);
-      this.realEngineGain.gain.setTargetAtTime(realVol, t, 0.03);
-    } else if (this.engineActive && !this.samplesLoading) {
-      // Attempt recovery if buffer loaded after start
-      this.startRealEngineSource(this.currentCarId);
-    }
-
-    // 2. Dynamic filter cutoff for layered sub/synth: Muffled low idle (280Hz) to screaming open throttle (3800Hz+)
-    const targetFilterCutoff = Math.max(
-      220,
-      280 + (actualRpm / 8500) * 2600 + throttle * 950 - brake * 200
-    );
-
-    // Engine volume scales with throttle and RPM
-    const targetGain = Math.min(
-      0.55,
-      (0.12 + (actualRpm / 8500) * 0.28 + throttle * 0.14) * limiterAttenuation
-    );
-
-    // Turbo boost builds with throttle and RPM
-    if (throttle > 0.4 && actualRpm > 3200) {
-      this.boostPressure = Math.min(1.0, this.boostPressure + 0.04);
-    } else {
-      // If throttle dropped abruptly while under boost, trigger blow-off valve
-      if (this.prevThrottle > 0.6 && throttle < 0.2 && this.boostPressure > 0.4) {
-        this.playTurboBlowOff(this.boostPressure);
-      }
-      this.boostPressure = Math.max(0, this.boostPressure - 0.06);
-    }
-    this.prevThrottle = throttle;
-
-    // Smooth Web Audio parameter transitions via setTargetAtTime
-    this.engineCylinderOsc.frequency.setTargetAtTime(baseCylinderFreq, t, 0.03);
-    this.engineHarmonicOsc.frequency.setTargetAtTime(baseCylinderFreq * 1.5, t, 0.03);
-    this.engineSubOsc.frequency.setTargetAtTime(baseCylinderFreq * 0.5, t, 0.03);
-    this.engineFilter.frequency.setTargetAtTime(targetFilterCutoff, t, 0.04);
-    this.engineGain.gain.setTargetAtTime(targetGain, t, 0.03);
-
-    // Air noise intake increases with throttle
-    this.engineNoiseGain.gain.setTargetAtTime(0.02 + throttle * 0.06, t, 0.05);
-
-    // Turbocharger whistle pitch and volume
-    const turboFreq = 1600 + this.boostPressure * 3800 + (actualRpm / 8500) * 1200;
-    const turboVol = this.boostPressure * 0.09 * (this.isMuted ? 0 : 1);
-    this.turboOsc.frequency.setTargetAtTime(turboFreq, t, 0.05);
-    this.turboGain.gain.setTargetAtTime(turboVol, t, 0.05);
+    // Car sound fully removed
   }
 
-  /**
-   * Triggers an authentic exhaust gear shift "pop" / DSG crackle on upshift.
-   */
-  public playGearShiftPop(gear: number) {
-    if (!this.ctx || !this.sfxGain || this.isMuted) return;
-
-    const t = this.ctx.currentTime;
-
-    // 1. Sharp exhaust explosion pop (noise transient)
-    const bufferSize = Math.floor(this.ctx.sampleRate * 0.12);
-    const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const data = noiseBuffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.025));
-    }
-
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = noiseBuffer;
-
-    const popFilter = this.ctx.createBiquadFilter();
-    popFilter.type = 'lowpass';
-    popFilter.frequency.setValueAtTime(800 + gear * 150, t);
-    popFilter.frequency.exponentialRampToValueAtTime(180, t + 0.1);
-
-    const popGain = this.ctx.createGain();
-    popGain.gain.setValueAtTime(0.42, t);
-    popGain.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
-
-    noise.connect(popFilter);
-    popFilter.connect(popGain);
-    popGain.connect(this.sfxGain);
-
-    // 2. Low-frequency exhaust cylinder thud
-    const subOsc = this.ctx.createOscillator();
-    subOsc.type = 'sine';
-    subOsc.frequency.setValueAtTime(140, t);
-    subOsc.frequency.exponentialRampToValueAtTime(35, t + 0.14);
-
-    const subGain = this.ctx.createGain();
-    subGain.gain.setValueAtTime(0.35, t);
-    subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
-
-    subOsc.connect(subGain);
-    subGain.connect(this.sfxGain);
-
-    noise.start(t);
-    subOsc.start(t);
-    noise.stop(t + 0.12);
-    subOsc.stop(t + 0.15);
+  public playGearShiftPop(_gear: number) {
+    // Car sound fully removed
   }
 
-  /**
-   * Triggers an aggressive throttle rev-match blip sound on downshift.
-   */
-  public playDownshiftBlip(gear: number) {
-    if (!this.ctx || !this.sfxGain || this.isMuted) return;
-
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(110 + gear * 30, t);
-    osc.frequency.exponentialRampToValueAtTime(260 + gear * 40, t + 0.08);
-    osc.frequency.exponentialRampToValueAtTime(130 + gear * 20, t + 0.18);
-
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(1200, t);
-
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.24, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.19);
-
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.sfxGain);
-
-    osc.start(t);
-    osc.stop(t + 0.2);
-  }
-
-  /**
-   * Triggers realistic pneumatic turbo blow-off flutter release ("pshhhh-tut-tut").
-   */
-  private playTurboBlowOff(boostIntensity: number) {
-    if (!this.ctx || !this.sfxGain || this.isMuted) return;
-
-    const t = this.ctx.currentTime;
-    const duration = 0.25;
-    const bufferSize = Math.floor(this.ctx.sampleRate * duration);
-    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-
-    for (let i = 0; i < bufferSize; i++) {
-      const envelope = Math.exp(-i / (this.ctx.sampleRate * 0.08));
-      // Multi-frequency flutter modulation
-      const flutter = 1.0 + 0.3 * Math.sin((i / this.ctx.sampleRate) * Math.PI * 32);
-      data[i] = (Math.random() * 2 - 1) * envelope * flutter;
-    }
-
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(3200, t);
-    filter.frequency.exponentialRampToValueAtTime(1200, t + duration);
-    filter.Q.setValueAtTime(3.0, t);
-
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.2 * boostIntensity, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.sfxGain);
-
-    noise.start(t);
-    noise.stop(t + duration + 0.02);
+  public playDownshiftBlip(_gear: number) {
+    // Car sound fully removed
   }
 
   public stopEngine() {
-    this.engineActive = false;
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    if (this.engineGain) {
-      this.engineGain.gain.setTargetAtTime(0, t, 0.08);
-    }
-    if (this.realEngineGain) {
-      this.realEngineGain.gain.setTargetAtTime(0, t, 0.08);
-    }
-    if (this.realEngineSource) {
-      try {
-        this.realEngineSource.stop(t + 0.1);
-        this.realEngineSource.disconnect();
-      } catch {
-        // Source may already have ended
-      }
-      this.realEngineSource = null;
-    }
+    // Car sound fully removed
   }
 
-  /**
-   * Previews a real engine rev burst in the Garage showroom
-   */
-  public previewEngineRev(carId: string) {
-    if (!this.ctx) this.init();
-    if (!this.ctx || !this.masterGain) return;
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
-    }
-
-    const sampleKey = this.getSampleKeyForCar(carId);
-    let buffer = this.realEngineBuffers.get(sampleKey);
-    if (!buffer) {
-      buffer = this.realEngineBuffers.get('ferrari') || this.realEngineBuffers.get('maserati') || this.realEngineBuffers.get('mclaren');
-    }
-    if (!buffer) return;
-
-    const t = this.ctx.currentTime;
-    const revSource = this.ctx.createBufferSource();
-    revSource.buffer = buffer;
-    revSource.loop = false;
-
-    const revFilter = this.ctx.createBiquadFilter();
-    revFilter.type = 'lowpass';
-    revFilter.frequency.setValueAtTime(650, t);
-    revFilter.frequency.exponentialRampToValueAtTime(5400, t + 0.45);
-    revFilter.frequency.exponentialRampToValueAtTime(1100, t + 1.4);
-
-    const revGain = this.ctx.createGain();
-    revGain.gain.setValueAtTime(0.25, t);
-    revGain.gain.linearRampToValueAtTime(0.75, t + 0.35);
-    revGain.gain.exponentialRampToValueAtTime(0.001, t + 1.6);
-
-    // Dynamic pitch throttle blip: Idle (0.68x) -> High-rev scream (1.45x) -> Settle (0.72x)
-    revSource.playbackRate.setValueAtTime(0.68, t);
-    revSource.playbackRate.exponentialRampToValueAtTime(1.45, t + 0.42);
-    revSource.playbackRate.exponentialRampToValueAtTime(0.72, t + 1.35);
-
-    revSource.connect(revFilter);
-    revFilter.connect(revGain);
-    revGain.connect(this.masterGain);
-
-    revSource.start(t);
-    revSource.stop(t + 1.65);
+  public previewEngineRev(_carId?: string) {
+    // Car sound fully removed
   }
 
   public playNearMiss() {

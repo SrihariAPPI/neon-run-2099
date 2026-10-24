@@ -1,7 +1,7 @@
 import React from 'react';
 import { CarSpec, PlayerStats } from '../types/game';
 import { INITIAL_CARS, PAINT_PALETTE, UNDERGLOW_PALETTE } from '../game/cars';
-import { ArrowLeft, Lock, Unlock, Gauge, Zap, Shield, Sparkles, Volume2 } from 'lucide-react';
+import { ArrowLeft, Lock, Unlock, Gauge, Zap, Shield, Sparkles } from 'lucide-react';
 import { soundManager } from '../game/audio';
 
 interface GarageModalProps {
@@ -151,7 +151,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               <div>
                 <div className="text-lg font-black text-white">{selectedCar.name}</div>
                 <div className="text-xs text-slate-400 max-w-md">{selectedCar.tagline}</div>
-                {/* Stats & Rev Preview */}
+                {/* Stats */}
                 <div className="flex flex-wrap items-center gap-3 mt-2.5 text-xs">
                   <div className="flex items-center gap-1 text-slate-300">
                     <Gauge className="w-3.5 h-3.5 text-cyan-400" />
@@ -165,14 +165,6 @@ export const GarageModal: React.FC<GarageModalProps> = ({
                     <Shield className="w-3.5 h-3.5 text-rose-400" />
                     <span>{(selectedCar.handling * 10).toFixed(1)}/10</span>
                   </div>
-                  <button
-                    onClick={() => soundManager.previewEngineRev(selectedCar.id)}
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-cyan-950/40 hover:bg-cyan-900/60 border border-cyan-500/40 text-cyan-300 text-[11px] font-bold tracking-wider uppercase transition-all active:scale-95 cursor-pointer ml-1"
-                    title="Rev authentic real engine sound"
-                  >
-                    <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />
-                    <span>REV SOUND</span>
-                  </button>
                 </div>
               </div>
 
