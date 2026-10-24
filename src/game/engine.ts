@@ -229,6 +229,7 @@ export class GameEngine {
     this.gameMode = mode;
     if (mode === 'PLAYING') {
       soundManager.init();
+      soundManager.resume();
       soundManager.startRealEngine(this.currentSpec.id);
       soundManager.startCyberpunkMusic();
     } else {

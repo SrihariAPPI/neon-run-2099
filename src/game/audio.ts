@@ -1,8 +1,8 @@
 /**
- * Procedural Web Audio Engine for NEON RUN: 2099
- * Features dynamic multi-harmonic engine revving synthesis scaling with RPM,
- * simulated gear upshift pops, downshift rev-blips, turbo spool & blow-off,
- * rev limiter stutter, near-miss whoosh, collision impacts, nitro, and cyberpunk ambient music.
+ * High-Performance Web Audio Engine for NEON RUN: 2099
+ * Integrates the player's custom car engine sound recording with dynamic
+ * RPM, throttle, gear, and braking response, seamless looping,
+ * robust browser autoplay unlocking, and instantaneous preloading.
  */
 
 export type ShiftType = 'UP' | 'DOWN';
@@ -18,6 +18,7 @@ class SoundSystem {
   private isMusicPlaying = false;
   private currentStep = 0;
 
+  // Real Engine Audio Nodes
   private engineGain: GainNode | null = null;
   private engineSource: AudioBufferSourceNode | null = null;
   private engineGainNode: GainNode | null = null;
@@ -25,28 +26,105 @@ class SoundSystem {
   private engineBassBoost: BiquadFilterNode | null = null;
   private engineBuffer: AudioBuffer | null = null;
   private fullEngineBuffer: AudioBuffer | null = null;
+
+  // Procedural fallback nodes while audio buffer loads over network
+  private fallbackOsc1: OscillatorNode | null = null;
+  private fallbackOsc2: OscillatorNode | null = null;
+  private fallbackGain: GainNode | null = null;
+
   private isEngineLoading = false;
   private isEngineRunning = false;
-  private engineVolume = 0.85;
+  private engineVolume = 1.0;
+
+  // Raw array buffers cached during preload
+  private cachedLoopArray: ArrayBuffer | null = null;
+  private cachedFullArray: ArrayBuffer | null = null;
 
   private isMuted = false;
   private initialized = false;
 
+  constructor() {
+    // Automatically kick off network preloading as soon as the module loads
+    this.preload();
+  }
+
+  /**
+   * Preload audio recordings over the network ahead of time.
+   * Caches raw ArrayBuffers so they can be decoded instantly when AudioContext unlocks.
+   */
+  public async preload() {
+    if (this.cachedLoopArray && this.cachedFullArray) return;
+
+    const candidateLoopPaths = [
+      '/audio/player-engine-loop.wav',
+      'audio/player-engine-loop.wav',
+      './audio/player-engine-loop.wav',
+      '/audio/player-engine.wav',
+      'audio/player-engine.wav',
+      '/assets/aistudio/se_senjbmkoivgr57j4_fbf67cce.wav',
+      'assets/aistudio/se_senjbmkoivgr57j4_fbf67cce.wav',
+    ];
+
+    if (!this.cachedLoopArray) {
+      for (const path of candidateLoopPaths) {
+        try {
+          const res = await fetch(path);
+          if (res.ok) {
+            this.cachedLoopArray = await res.arrayBuffer();
+            break;
+          }
+        } catch {
+          // Try next fallback
+        }
+      }
+    }
+
+    if (!this.cachedFullArray) {
+      const candidateFullPaths = [
+        '/audio/player-engine.wav',
+        'audio/player-engine.wav',
+        '/assets/aistudio/se_senjbmkoivgr57j4_fbf67cce.wav',
+        'assets/aistudio/se_senjbmkoivgr57j4_fbf67cce.wav',
+      ];
+      for (const path of candidateFullPaths) {
+        try {
+          const res = await fetch(path);
+          if (res.ok) {
+            this.cachedFullArray = await res.arrayBuffer();
+            break;
+          }
+        } catch {
+          // Try next fallback
+        }
+      }
+    }
+
+    // If AudioContext is already available, decode immediately
+    if (this.ctx && !this.engineBuffer && this.cachedLoopArray) {
+      this.decodeCachedBuffers();
+    }
+  }
+
+  /**
+   * Initializes the Web Audio graph and immediately resumes the AudioContext
+   * to comply with browser autoplay unlock policies.
+   */
   public init() {
-    if (this.initialized && this.ctx) {
+    if (this.ctx) {
       if (this.ctx.state === 'suspended') {
-        this.ctx.resume();
+        this.ctx.resume().catch(() => {});
       }
       return;
     }
 
     try {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
       this.ctx = new AudioCtx();
 
-      // Master output
+      // Master output bus (loud and punchy)
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.setValueAtTime(0.7, this.ctx.currentTime);
+      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.95, this.ctx.currentTime);
       this.masterGain.connect(this.ctx.destination);
 
       // SFX bus
@@ -54,77 +132,161 @@ class SoundSystem {
       this.sfxGain.gain.setValueAtTime(0.85, this.ctx.currentTime);
       this.sfxGain.connect(this.masterGain);
 
-      // Engine bus
+      // Player Engine bus (Full dynamic presence)
       this.engineGain = this.ctx.createGain();
       this.engineGain.gain.setValueAtTime(this.engineVolume, this.ctx.currentTime);
       this.engineGain.connect(this.masterGain);
 
-      // Music bus
+      // Cyberpunk Synthwave Music bus
       this.musicGain = this.ctx.createGain();
       this.musicGain.gain.setValueAtTime(0.35, this.ctx.currentTime);
       this.musicGain.connect(this.masterGain);
 
       this.initialized = true;
 
-      // Asynchronously load the custom engine recording
-      this.loadEngineAudio();
-    } catch {
-      // Audio context might fail in restricted environments
+      // Resume context immediately on initialization
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+
+      // Decode preloaded buffers or fetch if not ready
+      if (this.cachedLoopArray) {
+        this.decodeCachedBuffers();
+      } else {
+        this.loadEngineAudio();
+      }
+    } catch (err) {
+      console.warn('AudioContext initialization failed:', err);
+    }
+  }
+
+  /**
+   * Explicitly resumes the AudioContext. Safe to call on any user interaction.
+   */
+  public async resume() {
+    if (!this.ctx) {
+      this.init();
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      try {
+        await this.ctx.resume();
+      } catch (err) {
+        console.warn('AudioContext resume failed:', err);
+      }
+    }
+  }
+
+  public isUnlocked(): boolean {
+    return this.ctx !== null && this.ctx.state === 'running';
+  }
+
+  /**
+   * Decodes the cached ArrayBuffers into usable Web Audio buffers.
+   */
+  private async decodeCachedBuffers() {
+    if (!this.ctx) return;
+
+    if (this.cachedLoopArray && !this.engineBuffer) {
+      try {
+        // Clone array buffer for decodeAudioData since it detaches the source buffer
+        const copy = this.cachedLoopArray.slice(0);
+        this.engineBuffer = await this.ctx.decodeAudioData(copy);
+      } catch (err) {
+        console.warn('Error decoding cached loop buffer:', err);
+      }
+    }
+
+    if (this.cachedFullArray && !this.fullEngineBuffer) {
+      try {
+        const copy = this.cachedFullArray.slice(0);
+        this.fullEngineBuffer = await this.ctx.decodeAudioData(copy);
+      } catch (err) {
+        console.warn('Error decoding cached full buffer:', err);
+      }
+    }
+
+    // If engine was waiting to start, start immediately
+    if (this.isEngineRunning && !this.engineSource && this.engineBuffer) {
+      this.startRealEngine();
     }
   }
 
   /**
    * Loads the custom engine audio recording into memory.
-   * Loads the seamless loop version and the full 30s recording.
    */
   private async loadEngineAudio() {
     if (!this.ctx || this.engineBuffer || this.isEngineLoading) return;
     this.isEngineLoading = true;
 
     try {
-      // First attempt to load the seamlessly crossfaded version
-      const loopRes = await fetch('/audio/player-engine-loop.wav');
-      if (loopRes.ok) {
-        const loopArray = await loopRes.arrayBuffer();
-        if (this.ctx) {
-          this.engineBuffer = await this.ctx.decodeAudioData(loopArray);
-        }
-      }
-    } catch {
-      // Loop fetch fallback
+      await this.preload();
+      await this.decodeCachedBuffers();
+    } catch (err) {
+      console.warn('Failed to load engine audio:', err);
+    } finally {
+      this.isEngineLoading = false;
     }
 
-    // If loop version failed, fallback to the full recording
-    if (!this.engineBuffer && this.ctx) {
-      try {
-        const res = await fetch('/audio/player-engine.wav');
-        if (res.ok) {
-          const arr = await res.arrayBuffer();
-          if (this.ctx) {
-            this.engineBuffer = await this.ctx.decodeAudioData(arr);
-          }
-        }
-      } catch {
-        // Ignore fallback error
-      }
-    }
-
-    // Also load the full recording for rev preview and events
-    try {
-      const fullRes = await fetch('/audio/player-engine.wav');
-      if (fullRes.ok && this.ctx) {
-        const fullArr = await fullRes.arrayBuffer();
-        this.fullEngineBuffer = await this.ctx.decodeAudioData(fullArr);
-      }
-    } catch {
-      // Optional full recording load
-    }
-
-    this.isEngineLoading = false;
-
-    // If engine was requested to start while loading was in progress, start now
-    if (this.isEngineRunning && !this.engineSource) {
+    if (this.isEngineRunning && !this.engineSource && this.engineBuffer) {
       this.startRealEngine();
+    }
+  }
+
+  /**
+   * Starts procedural engine hum as an immediate fallback while WAV is loading.
+   */
+  private startProceduralFallback() {
+    if (!this.ctx || !this.engineGain || this.fallbackGain) return;
+
+    const time = this.ctx.currentTime;
+    this.fallbackGain = this.ctx.createGain();
+    this.fallbackGain.gain.setValueAtTime(0.2, time);
+
+    this.fallbackOsc1 = this.ctx.createOscillator();
+    this.fallbackOsc1.type = 'sawtooth';
+    this.fallbackOsc1.frequency.setValueAtTime(55, time);
+
+    this.fallbackOsc2 = this.ctx.createOscillator();
+    this.fallbackOsc2.type = 'triangle';
+    this.fallbackOsc2.frequency.setValueAtTime(110, time);
+
+    const fallbackFilter = this.ctx.createBiquadFilter();
+    fallbackFilter.type = 'lowpass';
+    fallbackFilter.frequency.setValueAtTime(800, time);
+
+    this.fallbackOsc1.connect(fallbackFilter);
+    this.fallbackOsc2.connect(fallbackFilter);
+    fallbackFilter.connect(this.fallbackGain);
+    this.fallbackGain.connect(this.engineGain);
+
+    this.fallbackOsc1.start(time);
+    this.fallbackOsc2.start(time);
+  }
+
+  private stopProceduralFallback() {
+    if (this.fallbackGain && this.ctx) {
+      const time = this.ctx.currentTime;
+      try {
+        this.fallbackGain.gain.cancelScheduledValues(time);
+        this.fallbackGain.gain.setTargetAtTime(0.0001, time, 0.05);
+      } catch {
+        // Ignore
+      }
+      const osc1 = this.fallbackOsc1;
+      const osc2 = this.fallbackOsc2;
+      setTimeout(() => {
+        try {
+          osc1?.stop();
+          osc2?.stop();
+          osc1?.disconnect();
+          osc2?.disconnect();
+        } catch {
+          // Ignore
+        }
+      }, 70);
+      this.fallbackOsc1 = null;
+      this.fallbackOsc2 = null;
+      this.fallbackGain = null;
     }
   }
 
@@ -134,20 +296,28 @@ class SoundSystem {
    */
   public startRealEngine(_carId?: string) {
     this.isEngineRunning = true;
+    if (!this.ctx) {
+      this.init();
+    }
     if (!this.ctx || !this.engineGain) return;
 
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
 
+    // If buffer is not ready yet, run procedural fallback and trigger load
     if (!this.engineBuffer) {
+      this.startProceduralFallback();
       if (!this.isEngineLoading) {
         this.loadEngineAudio();
       }
       return;
     }
 
-    // Stop existing instance if any
+    // Clean up fallback if active
+    this.stopProceduralFallback();
+
+    // Stop existing source if already running
     if (this.engineSource) {
       try {
         this.engineSource.stop();
@@ -165,28 +335,26 @@ class SoundSystem {
     this.engineSource.buffer = this.engineBuffer;
     this.engineSource.loop = true;
 
-    // Dynamic Lowpass Filter: controls harmonic brightness with RPM and throttle
+    // Dynamic Lowpass Filter: allows full mechanical roar while controlling brightness
     this.engineFilter = this.ctx.createBiquadFilter();
     this.engineFilter.type = 'lowpass';
-    this.engineFilter.frequency.setValueAtTime(1200, time);
-    this.engineFilter.Q.setValueAtTime(1.2, time);
+    this.engineFilter.frequency.setValueAtTime(4500, time);
+    this.engineFilter.Q.setValueAtTime(1.0, time);
 
-    // Bass Boost Filter: adds weight and cyberpunk low-end rumble
+    // Bass Boost Filter: adds heavy low-end visceral power
     this.engineBassBoost = this.ctx.createBiquadFilter();
     this.engineBassBoost.type = 'lowshelf';
     this.engineBassBoost.frequency.setValueAtTime(110, time);
-    this.engineBassBoost.gain.setValueAtTime(3.5, time);
+    this.engineBassBoost.gain.setValueAtTime(4.2, time);
 
-    // Dynamic Gain stage
+    // Dynamic Gain stage (starts at clear, audible level)
     this.engineGainNode = this.ctx.createGain();
-    this.engineGainNode.gain.setValueAtTime(0.001, time);
-    // Smooth fade in to avoid start clicks
-    this.engineGainNode.gain.exponentialRampToValueAtTime(0.35, time + 0.08);
+    this.engineGainNode.gain.setValueAtTime(0.55, time);
 
     // Initial pitch rate at idle
-    this.engineSource.playbackRate.setValueAtTime(0.58, time);
+    this.engineSource.playbackRate.setValueAtTime(0.65, time);
 
-    // Routing graph: Source -> Filter -> BassBoost -> GainNode -> EngineBus -> Master
+    // Audio Graph: Source -> Filter -> BassBoost -> GainNode -> EngineBus -> Master -> Destination
     this.engineSource.connect(this.engineFilter);
     this.engineFilter.connect(this.engineBassBoost);
     this.engineBassBoost.connect(this.engineGainNode);
@@ -208,42 +376,72 @@ class SoundSystem {
     brake: number,
     isShifting: boolean
   ) {
-    if (!this.ctx || !this.engineSource || !this.engineGainNode || !this.engineFilter) return;
+    if (!this.ctx) return;
+
+    // If engine was requested to run but source hasn't started yet (e.g. buffer just finished loading)
+    if (this.isEngineRunning && !this.engineSource && this.engineBuffer) {
+      this.startRealEngine();
+    }
+
+    // Update procedural fallback if active
+    if (this.fallbackOsc1 && this.fallbackOsc2 && this.fallbackGain) {
+      const now = this.ctx.currentTime;
+      const baseFreq = 50 + rpmNormalized * 120 + throttle * 40;
+      try {
+        this.fallbackOsc1.frequency.setTargetAtTime(baseFreq, now, 0.05);
+        this.fallbackOsc2.frequency.setTargetAtTime(baseFreq * 2, now, 0.05);
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (!this.engineSource || !this.engineGainNode || !this.engineFilter) return;
 
     const now = this.ctx.currentTime;
     const clampedRpm = Math.max(0, Math.min(1.0, rpmNormalized));
 
     // Dynamic Pitch / Playback Rate:
-    // Low rumble at idle (~0.56x rate). Climbs aggressively to ~1.44x at redline.
-    let targetRate = 0.56 + clampedRpm * 0.86;
-
-    // During gear shift, momentary clutch dip
+    // Low aggressive idle rumble (~0.65x rate), climbs smoothly to ~1.45x at high RPM
+    let targetRate = 0.65 + clampedRpm * 0.75;
     if (isShifting) {
-      targetRate *= 0.82;
+      targetRate *= 0.84;
+    }
+    targetRate = Math.max(0.52, Math.min(1.68, targetRate));
+
+    try {
+      this.engineSource.playbackRate.cancelScheduledValues(now);
+      this.engineSource.playbackRate.setTargetAtTime(targetRate, now, 0.06);
+    } catch {
+      this.engineSource.playbackRate.value = targetRate;
     }
 
-    targetRate = Math.max(0.48, Math.min(1.75, targetRate));
-
-    // Smooth exponential ramp without clicks
-    this.engineSource.playbackRate.setTargetAtTime(targetRate, now, 0.07);
-
-    // Dynamic Filter Brightness:
-    // Warm rumble at idle, full screaming frequency spectrum under throttle & revs
-    const targetCutoff = 1100 + (throttle * 0.65 + clampedRpm * 0.35) * 16500;
-    this.engineFilter.frequency.setTargetAtTime(Math.max(900, Math.min(20000, targetCutoff)), now, 0.06);
+    // Dynamic Filter Cutoff:
+    // Warm rumble at idle (4200 Hz), open screaming induction under throttle (up to 20 kHz)
+    const targetCutoff = 3800 + clampedRpm * 11000 + throttle * 5200;
+    try {
+      this.engineFilter.frequency.cancelScheduledValues(now);
+      this.engineFilter.frequency.setTargetAtTime(Math.max(1200, Math.min(21000, targetCutoff)), now, 0.06);
+    } catch {
+      this.engineFilter.frequency.value = targetCutoff;
+    }
 
     // Dynamic Loudness:
-    // Responsive to throttle demand, speed, and braking
-    let targetGain = 0.32 + (throttle * 0.42) + (clampedRpm * 0.16);
+    // Clear presence at idle, expands aggressively with throttle
+    let targetGain = 0.48 + throttle * 0.38 + clampedRpm * 0.14;
     if (brake > 0.1) {
-      targetGain *= 0.72;
+      targetGain *= 0.76;
     }
     if (isShifting) {
-      targetGain *= 0.60;
+      targetGain *= 0.65;
     }
-    targetGain = Math.max(0.12, Math.min(0.92, targetGain));
+    targetGain = Math.max(0.25, Math.min(1.0, targetGain));
 
-    this.engineGainNode.gain.setTargetAtTime(targetGain, now, 0.05);
+    try {
+      this.engineGainNode.gain.cancelScheduledValues(now);
+      this.engineGainNode.gain.setTargetAtTime(targetGain, now, 0.05);
+    } catch {
+      this.engineGainNode.gain.value = targetGain;
+    }
   }
 
   /**
@@ -253,29 +451,29 @@ class SoundSystem {
     if (!this.ctx || !this.sfxGain || this.isMuted) return;
     const time = this.ctx.currentTime;
 
-    const bufferSize = Math.floor(this.ctx.sampleRate * 0.07);
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.08);
     const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.012));
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.014));
     }
     const noise = this.ctx.createBufferSource();
     noise.buffer = buffer;
 
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(900 + gear * 120, time);
+    filter.frequency.setValueAtTime(1100 + gear * 150, time);
 
     const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.35, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.07);
+    gain.gain.setValueAtTime(0.4, time);
+    gain.gain.setTargetAtTime(0.001, time + 0.01, 0.03);
 
     noise.connect(filter);
     filter.connect(gain);
     gain.connect(this.sfxGain);
 
     noise.start(time);
-    noise.stop(time + 0.08);
+    noise.stop(time + 0.09);
   }
 
   /**
@@ -284,10 +482,14 @@ class SoundSystem {
   public playDownshiftBlip(_gear: number) {
     if (!this.ctx || !this.engineSource) return;
     const time = this.ctx.currentTime;
-    const currentRate = this.engineSource.playbackRate.value;
-    this.engineSource.playbackRate.cancelScheduledValues(time);
-    this.engineSource.playbackRate.setValueAtTime(currentRate + 0.15, time);
-    this.engineSource.playbackRate.setTargetAtTime(currentRate, time + 0.04, 0.08);
+    try {
+      const currentRate = this.engineSource.playbackRate.value;
+      this.engineSource.playbackRate.cancelScheduledValues(time);
+      this.engineSource.playbackRate.setValueAtTime(currentRate + 0.18, time);
+      this.engineSource.playbackRate.setTargetAtTime(currentRate, time + 0.04, 0.08);
+    } catch {
+      // Ignore
+    }
   }
 
   /**
@@ -295,13 +497,18 @@ class SoundSystem {
    */
   public stopEngine() {
     this.isEngineRunning = false;
+    this.stopProceduralFallback();
+
     if (!this.ctx) return;
 
     if (this.engineGainNode) {
       const time = this.ctx.currentTime;
-      this.engineGainNode.gain.cancelScheduledValues(time);
-      this.engineGainNode.gain.setValueAtTime(this.engineGainNode.gain.value, time);
-      this.engineGainNode.gain.setTargetAtTime(0.0001, time, 0.04);
+      try {
+        this.engineGainNode.gain.cancelScheduledValues(time);
+        this.engineGainNode.gain.setTargetAtTime(0.0001, time, 0.04);
+      } catch {
+        this.engineGainNode.gain.value = 0;
+      }
     }
 
     const src = this.engineSource;
@@ -322,9 +529,16 @@ class SoundSystem {
    * Garage / showcase engine rev preview using the custom recording.
    */
   public previewEngineRev(_carId?: string) {
+    this.init();
+    this.resume();
+
     if (!this.ctx || this.isMuted) return;
     const buf = this.fullEngineBuffer || this.engineBuffer;
-    if (!buf) return;
+    if (!buf) {
+      // If buffer not decoded yet, preload and try
+      this.loadEngineAudio();
+      return;
+    }
 
     try {
       const time = this.ctx.currentTime;
@@ -333,32 +547,38 @@ class SoundSystem {
 
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(3600, time);
+      filter.frequency.setValueAtTime(6000, time);
 
       const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.001, time);
-      gain.gain.linearRampToValueAtTime(0.65, time + 0.25);
-      gain.gain.exponentialRampToValueAtTime(0.001, time + 1.8);
+      gain.gain.setValueAtTime(0.65, time);
+      gain.gain.setTargetAtTime(0.001, time + 1.6, 0.2);
 
-      src.playbackRate.setValueAtTime(0.62, time);
-      src.playbackRate.exponentialRampToValueAtTime(1.3, time + 0.7);
-      src.playbackRate.exponentialRampToValueAtTime(0.75, time + 1.8);
+      src.playbackRate.setValueAtTime(0.7, time);
+      src.playbackRate.setTargetAtTime(1.35, time + 0.1, 0.4);
+      src.playbackRate.setTargetAtTime(0.8, time + 1.1, 0.3);
 
       src.connect(filter);
       filter.connect(gain);
       gain.connect(this.masterGain!);
 
-      src.start(time, 1.5);
-      src.stop(time + 1.85);
-    } catch {
-      // Ignore
+      src.start(time, 1.2);
+      src.stop(time + 2.0);
+    } catch (err) {
+      console.warn('Engine rev preview error:', err);
     }
   }
 
   public setEngineVolume(val: number) {
     this.engineVolume = Math.max(0, Math.min(1, val));
     if (this.engineGain && this.ctx) {
-      this.engineGain.gain.setValueAtTime(this.isMuted ? 0 : this.engineVolume, this.ctx.currentTime);
+      const time = this.ctx.currentTime;
+      const target = this.isMuted ? 0 : this.engineVolume;
+      try {
+        this.engineGain.gain.cancelScheduledValues(time);
+        this.engineGain.gain.setValueAtTime(target, time);
+      } catch {
+        this.engineGain.gain.value = target;
+      }
     }
   }
 
@@ -367,6 +587,7 @@ class SoundSystem {
   }
 
   public playNearMiss() {
+    this.init();
     if (!this.ctx || !this.sfxGain || this.isMuted) return;
 
     const time = this.ctx.currentTime;
@@ -374,21 +595,22 @@ class SoundSystem {
     const gain = this.ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(600, time);
-    osc.frequency.exponentialRampToValueAtTime(1400, time + 0.1);
-    osc.frequency.exponentialRampToValueAtTime(400, time + 0.25);
+    osc.frequency.setValueAtTime(650, time);
+    osc.frequency.setTargetAtTime(1500, time, 0.05);
+    osc.frequency.setTargetAtTime(450, time + 0.1, 0.08);
 
-    gain.gain.setValueAtTime(0.35, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.25);
+    gain.gain.setValueAtTime(0.4, time);
+    gain.gain.setTargetAtTime(0.001, time + 0.05, 0.08);
 
     osc.connect(gain);
     gain.connect(this.sfxGain);
 
     osc.start(time);
-    osc.stop(time + 0.26);
+    osc.stop(time + 0.28);
   }
 
   public playTrafficPass(pan: number = 0) {
+    this.init();
     if (!this.ctx || !this.sfxGain || this.isMuted) return;
 
     const time = this.ctx.currentTime;
@@ -397,11 +619,11 @@ class SoundSystem {
     const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
 
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(260, time);
-    osc.frequency.exponentialRampToValueAtTime(130, time + 0.35);
+    osc.frequency.setValueAtTime(280, time);
+    osc.frequency.setTargetAtTime(140, time, 0.12);
 
-    gain.gain.setValueAtTime(0.18, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.35);
+    gain.gain.setValueAtTime(0.2, time);
+    gain.gain.setTargetAtTime(0.001, time + 0.1, 0.1);
 
     if (panner) {
       panner.pan.setValueAtTime(pan, time);
@@ -414,19 +636,19 @@ class SoundSystem {
     }
 
     osc.start(time);
-    osc.stop(time + 0.36);
+    osc.stop(time + 0.38);
   }
 
   public playNitro() {
+    this.init();
     if (!this.ctx || !this.sfxGain || this.isMuted) return;
 
     const time = this.ctx.currentTime;
-    // Create white noise burst for futuristic nitro afterburner
-    const bufferSize = this.ctx.sampleRate * 0.4;
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.4);
     const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * 0.4;
+      data[i] = (Math.random() * 2 - 1) * 0.45;
     }
 
     const noise = this.ctx.createBufferSource();
@@ -435,27 +657,27 @@ class SoundSystem {
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'bandpass';
     filter.frequency.setValueAtTime(1200, time);
-    filter.frequency.exponentialRampToValueAtTime(3200, time + 0.35);
+    filter.frequency.setTargetAtTime(3400, time, 0.1);
     filter.Q.setValueAtTime(4.0, time);
 
     const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.3, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.4);
+    gain.gain.setValueAtTime(0.35, time);
+    gain.gain.setTargetAtTime(0.001, time + 0.1, 0.1);
 
     noise.connect(filter);
     filter.connect(gain);
     gain.connect(this.sfxGain);
 
     noise.start(time);
-    noise.stop(time + 0.41);
+    noise.stop(time + 0.42);
   }
 
   public playCrash() {
+    this.init();
     if (!this.ctx || !this.sfxGain || this.isMuted) return;
 
     const time = this.ctx.currentTime;
-    // Metallic noise crash
-    const bufferSize = this.ctx.sampleRate * 0.7;
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.7);
     const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
@@ -465,19 +687,18 @@ class SoundSystem {
     const noise = this.ctx.createBufferSource();
     noise.buffer = buffer;
 
-    // Sub thud
     const sub = this.ctx.createOscillator();
     sub.type = 'sawtooth';
-    sub.frequency.setValueAtTime(120, time);
-    sub.frequency.exponentialRampToValueAtTime(30, time + 0.5);
+    sub.frequency.setValueAtTime(130, time);
+    sub.frequency.setTargetAtTime(30, time, 0.15);
 
     const subGain = this.ctx.createGain();
-    subGain.gain.setValueAtTime(0.7, time);
-    subGain.gain.exponentialRampToValueAtTime(0.001, time + 0.6);
+    subGain.gain.setValueAtTime(0.75, time);
+    subGain.gain.setTargetAtTime(0.001, time + 0.1, 0.2);
 
     const noiseGain = this.ctx.createGain();
-    noiseGain.gain.setValueAtTime(0.8, time);
-    noiseGain.gain.exponentialRampToValueAtTime(0.001, time + 0.7);
+    noiseGain.gain.setValueAtTime(0.85, time);
+    noiseGain.gain.setTargetAtTime(0.001, time + 0.1, 0.2);
 
     noise.connect(noiseGain);
     noiseGain.connect(this.sfxGain);
@@ -487,11 +708,13 @@ class SoundSystem {
 
     noise.start(time);
     sub.start(time);
-    noise.stop(time + 0.71);
-    sub.stop(time + 0.61);
+    noise.stop(time + 0.72);
+    sub.stop(time + 0.65);
   }
 
   public playClick() {
+    this.init();
+    this.resume();
     if (!this.ctx || !this.sfxGain || this.isMuted) return;
 
     const time = this.ctx.currentTime;
@@ -499,30 +722,29 @@ class SoundSystem {
     const gain = this.ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(900, time);
-    osc.frequency.exponentialRampToValueAtTime(1400, time + 0.04);
+    osc.frequency.setValueAtTime(950, time);
+    osc.frequency.setTargetAtTime(1450, time, 0.015);
 
-    gain.gain.setValueAtTime(0.12, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+    gain.gain.setValueAtTime(0.18, time);
+    gain.gain.setTargetAtTime(0.001, time + 0.01, 0.015);
 
     osc.connect(gain);
     gain.connect(this.sfxGain);
 
     osc.start(time);
-    osc.stop(time + 0.05);
+    osc.stop(time + 0.06);
   }
 
   public startCyberpunkMusic() {
+    this.init();
+    this.resume();
     if (this.isMusicPlaying || !this.ctx || !this.musicGain) return;
     this.isMusicPlaying = true;
     this.currentStep = 0;
 
-    // Synthwave bassline notes (D minor: D1, F1, G1, A1, C2)
     const bassFreqs = [73.42, 73.42, 87.31, 73.42, 98.00, 73.42, 110.00, 98.00];
     const arpHarmonics = [293.66, 349.23, 440.0, 523.25, 440.0, 349.23, 293.66, 220.0];
-
-    // 128 BPM = 16th note step is 60 / (128 * 4) = ~0.117s
-    const stepDuration = 120; // ms
+    const stepDuration = 120; // ms (~128 BPM)
 
     this.musicInterval = window.setInterval(() => {
       if (!this.ctx || !this.musicGain || this.isMuted) return;
@@ -540,21 +762,21 @@ class SoundSystem {
         bassOsc.frequency.setValueAtTime(bassNote, t);
 
         bassFilter.type = 'lowpass';
-        bassFilter.frequency.setValueAtTime(450, t);
-        bassFilter.frequency.exponentialRampToValueAtTime(120, t + 0.16);
+        bassFilter.frequency.setValueAtTime(500, t);
+        bassFilter.frequency.setTargetAtTime(130, t, 0.05);
 
-        bGain.gain.setValueAtTime(0.2, t);
-        bGain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+        bGain.gain.setValueAtTime(0.24, t);
+        bGain.gain.setTargetAtTime(0.001, t + 0.05, 0.05);
 
         bassOsc.connect(bassFilter);
         bassFilter.connect(bGain);
         bGain.connect(this.musicGain);
 
         bassOsc.start(t);
-        bassOsc.stop(t + 0.19);
+        bassOsc.stop(t + 0.20);
       }
 
-      // Arpeggio synth on 16th notes with cyber resonance
+      // Arpeggio synth on 16th notes
       if (step % 2 === 1 || step % 4 === 0) {
         const arpNote = arpHarmonics[step % arpHarmonics.length];
         const arpOsc = this.ctx.createOscillator();
@@ -563,14 +785,14 @@ class SoundSystem {
         arpOsc.type = 'sine';
         arpOsc.frequency.setValueAtTime(arpNote, t);
 
-        aGain.gain.setValueAtTime(0.08, t);
-        aGain.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+        aGain.gain.setValueAtTime(0.1, t);
+        aGain.gain.setTargetAtTime(0.001, t + 0.03, 0.04);
 
         arpOsc.connect(aGain);
         aGain.connect(this.musicGain);
 
         arpOsc.start(t);
-        arpOsc.stop(t + 0.12);
+        arpOsc.stop(t + 0.13);
       }
 
       this.currentStep++;
@@ -586,9 +808,18 @@ class SoundSystem {
   }
 
   public toggleMute(): boolean {
+    this.init();
+    this.resume();
     this.isMuted = !this.isMuted;
     if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.7, this.ctx.currentTime);
+      const time = this.ctx.currentTime;
+      const target = this.isMuted ? 0 : 0.95;
+      try {
+        this.masterGain.gain.cancelScheduledValues(time);
+        this.masterGain.gain.setValueAtTime(target, time);
+      } catch {
+        this.masterGain.gain.value = target;
+      }
     }
     return this.isMuted;
   }
@@ -599,7 +830,14 @@ class SoundSystem {
 
   public setMasterVolume(val: number) {
     if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : val, this.ctx.currentTime);
+      const time = this.ctx.currentTime;
+      const target = this.isMuted ? 0 : Math.max(0, Math.min(1, val));
+      try {
+        this.masterGain.gain.cancelScheduledValues(time);
+        this.masterGain.gain.setValueAtTime(target, time);
+      } catch {
+        this.masterGain.gain.value = target;
+      }
     }
   }
 

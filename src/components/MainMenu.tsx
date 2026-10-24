@@ -1,6 +1,6 @@
 import React from 'react';
 import { CarSpec, PlayerStats } from '../types/game';
-import { Play, Wrench, Trophy, Gauge, Shield, Zap } from 'lucide-react';
+import { Play, Wrench, Trophy, Gauge, Shield, Zap, Volume2, VolumeX } from 'lucide-react';
 import { soundManager } from '../game/audio';
 
 interface MainMenuProps {
@@ -16,14 +16,31 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onStartRun,
   onOpenGarage,
 }) => {
+  const [isMuted, setIsMuted] = React.useState(soundManager.getIsMuted());
+
   const handleStart = () => {
+    soundManager.init();
+    soundManager.resume();
     soundManager.playClick();
     onStartRun();
   };
 
   const handleGarage = () => {
+    soundManager.init();
+    soundManager.resume();
     soundManager.playClick();
     onOpenGarage();
+  };
+
+  const handleToggleSound = () => {
+    const muted = soundManager.toggleMute();
+    setIsMuted(muted);
+  };
+
+  const handleRevPreview = () => {
+    soundManager.init();
+    soundManager.resume();
+    soundManager.previewEngineRev(currentCar.id);
   };
 
   return (
@@ -43,17 +60,28 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           </p>
         </div>
 
-        {/* Player Stats Card */}
-        <div className="bg-slate-950/85 border border-cyan-500/30 p-3 sm:p-4 text-right">
-          <div className="text-[10px] text-slate-400 uppercase tracking-widest">CREDITS BALANCE</div>
-          <div className="text-xl sm:text-2xl font-black text-amber-400 tracking-wider">
-            {stats.credits.toLocaleString()} <span className="text-xs text-amber-400/80">CR</span>
-          </div>
+        {/* Top Right: Player Stats Card & Audio Toggle */}
+        <div className="flex items-start gap-3 pointer-events-auto">
+          <button
+            onClick={handleToggleSound}
+            className="p-3 bg-slate-950/85 border border-cyan-500/40 hover:border-cyan-400 text-cyan-300 hover:text-white transition-all shadow-lg flex items-center gap-2 text-xs font-bold"
+            title={isMuted ? 'Unmute Audio' : 'Mute Audio'}
+          >
+            {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-cyan-400" />}
+            <span className="hidden sm:inline">{isMuted ? 'AUDIO MUTED' : 'AUDIO ON'}</span>
+          </button>
 
-          <div className="flex items-center justify-end gap-3 mt-2 pt-2 border-t border-slate-800 text-xs text-slate-400">
-            <div className="flex items-center gap-1">
-              <Trophy className="w-3.5 h-3.5 text-cyan-400" />
-              <span>{stats.bestDistance.toLocaleString()} M</span>
+          <div className="bg-slate-950/85 border border-cyan-500/30 p-3 sm:p-4 text-right">
+            <div className="text-[10px] text-slate-400 uppercase tracking-widest">CREDITS BALANCE</div>
+            <div className="text-xl sm:text-2xl font-black text-amber-400 tracking-wider">
+              {stats.credits.toLocaleString()} <span className="text-xs text-amber-400/80">CR</span>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 mt-2 pt-2 border-t border-slate-800 text-xs text-slate-400">
+              <div className="flex items-center gap-1">
+                <Trophy className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{stats.bestDistance.toLocaleString()} M</span>
+              </div>
             </div>
           </div>
         </div>
@@ -91,6 +119,15 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <div className="font-bold text-slate-200 mt-0.5">{(currentCar.handling * 10).toFixed(1)}/10</div>
           </div>
         </div>
+
+        {/* Quick Engine Rev Test Button */}
+        <button
+          onClick={handleRevPreview}
+          className="w-full mt-3 py-2 px-3 bg-slate-900/90 hover:bg-slate-800 border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 text-xs font-bold tracking-wider flex items-center justify-center gap-2 transition-all active:scale-98"
+        >
+          <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
+          <span>TEST ENGINE ROAR</span>
+        </button>
       </div>
 
       {/* Bottom Dock: Play Action, Garage & Controls */}

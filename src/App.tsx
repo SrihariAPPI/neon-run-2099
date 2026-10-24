@@ -138,13 +138,37 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [gameMode]);
 
+  // Global Web Audio Autoplay Unlock on user interaction
+  useEffect(() => {
+    const unlockAudio = () => {
+      soundManager.init();
+      soundManager.resume();
+    };
+
+    window.addEventListener('pointerdown', unlockAudio, { passive: true });
+    window.addEventListener('keydown', unlockAudio, { passive: true });
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+
+    // Preload audio files ahead of time
+    soundManager.preload();
+
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
+
   // Game Flow Actions
   const handleStartRun = () => {
+    soundManager.init();
+    soundManager.resume();
     setGameMode('PLAYING');
     engineRef.current?.startRun();
   };
 
   const handlePause = () => {
+    soundManager.init();
     engineRef.current?.setMode('PAUSED');
     setGameMode('PAUSED');
   };
