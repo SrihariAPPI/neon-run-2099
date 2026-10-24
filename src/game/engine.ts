@@ -6,6 +6,7 @@ import { ParticleSystem } from './particles';
 import { buildPlayerCar, PlayerCarMesh } from './models';
 import { CameraView, CarSpec, GameMode, RunData } from '../types/game';
 import { soundManager } from './audio';
+import { CockpitPostProcessor } from './cockpitEffects';
 
 // Reusable math vectors to ensure zero GC stutter during 60+ FPS loop
 const _vec3Target = new THREE.Vector3();
@@ -28,6 +29,13 @@ export class GameEngine {
   private renderer: THREE.WebGLRenderer;
   private clock: THREE.Clock;
   private isSoftwareGl = false;
+  private postProcessor: CockpitPostProcessor | null = null;
+
+  // Cockpit Parallax & Head-Tracking State
+  private pointerParallaxX = 0;
+  private pointerParallaxY = 0;
+  private targetPointerParallaxX = 0;
+  private targetPointerParallaxY = 0;
 
   // Systems
   private highway: HighwayManager;
@@ -149,6 +157,15 @@ export class GameEngine {
     // 8. Spawn Player Car
     this.rebuildPlayerCar();
 
+    // 9. Cockpit Depth-of-Field & Speed Tunnel Post-Processor
+    if (!this.isSoftwareGl) {
+      try {
+        this.postProcessor = new CockpitPostProcessor(this.renderer, this.scene, this.camera);
+      } catch (err) {
+        console.warn('Post-processing fallback to direct render:', err);
+      }
+    }
+
     this.clock = new THREE.Clock();
 
     // 9. Input & Window Listeners
@@ -193,6 +210,9 @@ export class GameEngine {
     this.customPaint = customPaint;
     this.customUnderglow = customUnderglow;
     this.rebuildPlayerCar();
+    if (this.gameMode === 'PLAYING') {
+      soundManager.startRealEngine(this.currentSpec.id);
+    }
   }
 
   public setCameraView(view: CameraView) {
@@ -201,7 +221,7 @@ export class GameEngine {
 
   public cycleCamera() {
     if (this.cameraMode === 'CHASE') this.cameraMode = 'COCKPIT';
-    else if (this.cameraMode === 'COCKPIT') this.cameraMode = 'BUMPER';
+    else if (this.cameraMode === 'COCKPIT') this.cameraMode = 'HOOD';
     else this.cameraMode = 'CHASE';
   }
 
@@ -209,6 +229,7 @@ export class GameEngine {
     this.gameMode = mode;
     if (mode === 'PLAYING') {
       soundManager.init();
+      soundManager.startRealEngine(this.currentSpec.id);
       soundManager.startCyberpunkMusic();
     } else if (mode === 'GAMEOVER' || mode === 'PAUSED') {
       soundManager.stopEngine();
@@ -281,7 +302,19 @@ export class GameEngine {
     window.addEventListener('keyup', (e) => {
       this.keys[e.key.toLowerCase()] = false;
     });
+
+    // Subtle interactive pointer-based cabin glance parallax
+    window.addEventListener('pointermove', this.onPointerMove);
   }
+
+  private onPointerMove = (e: PointerEvent) => {
+    if (!this.container || this.isDestroyed) return;
+    const rect = this.container.getBoundingClientRect();
+    const normX = (e.clientX - rect.left) / Math.max(1, rect.width);
+    const normY = (e.clientY - rect.top) / Math.max(1, rect.height);
+    this.targetPointerParallaxX = (normX - 0.5) * 0.12;
+    this.targetPointerParallaxY = -(normY - 0.5) * 0.08;
+  };
 
   public setVirtualInputs(steer: number, throttle: number, brake: number, nitro: boolean) {
     this.steerInput = steer;
@@ -318,6 +351,9 @@ export class GameEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    if (this.postProcessor) {
+      this.postProcessor.setSize(w, h);
+    }
   };
 
   private tick() {
@@ -331,7 +367,22 @@ export class GameEngine {
       this.updateShowroom(delta);
     }
 
-    this.renderer.render(this.scene, this.camera);
+    // Update Cockpit Depth-of-Field & Speed Tunnel Pass
+    const speedNormalized = Math.min(1.0, (this.playerSpeed * 3.6) / this.currentSpec.topSpeed);
+    if (this.postProcessor) {
+      this.postProcessor.update(
+        this.cameraMode === 'COCKPIT' && this.gameMode === 'PLAYING',
+        speedNormalized,
+        delta
+      );
+    }
+
+    if (this.postProcessor && !this.isSoftwareGl) {
+      this.postProcessor.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+
     this.frameId = requestAnimationFrame(this.tick);
   }
 
@@ -415,29 +466,54 @@ export class GameEngine {
 
     // Update car mesh transform & chassis dynamic lean
     if (this.playerCar) {
-      this.playerCar.position.set(this.playerX, 0, this.playerZ);
+      // Subtle road flutter / suspension movement over road expansion joints
+      const roadFlutter = Math.sin(this.distanceTraveled * 0.4) * 0.008 * Math.min(1, this.playerSpeed / 15);
+      this.playerCar.position.set(this.playerX, roadFlutter, this.playerZ);
 
-      // Chassis Roll (lean into corners)
-      const targetRoll = -this.steerInput * 0.08 * Math.min(1, this.playerSpeed / 30);
+      // Chassis Roll (lean into corners with physical weight)
+      const targetRoll = -this.steerInput * 0.08 * Math.min(1, this.playerSpeed / 25);
       // Chassis Pitch (nose dips on brake, rises on accel)
-      const targetPitch = (this.brakeInput * -0.04) + (this.throttleInput * 0.025);
-      const targetYaw = -this.steerInput * 0.09;
+      const targetPitch = (this.brakeInput * -0.045) + (this.throttleInput * 0.03);
+      const targetYaw = -this.steerInput * 0.08;
 
-      this.playerCar.rotation.z = THREE.MathUtils.lerp(this.playerCar.rotation.z, targetRoll, delta * 10);
-      this.playerCar.rotation.x = THREE.MathUtils.lerp(this.playerCar.rotation.x, targetPitch, delta * 8);
-      this.playerCar.rotation.y = THREE.MathUtils.lerp(this.playerCar.rotation.y, targetYaw, delta * 12);
+      this.playerCar.rotation.z = THREE.MathUtils.lerp(this.playerCar.rotation.z, targetRoll, delta * 12);
+      this.playerCar.rotation.x = THREE.MathUtils.lerp(this.playerCar.rotation.x, targetPitch, delta * 10);
+      this.playerCar.rotation.y = THREE.MathUtils.lerp(this.playerCar.rotation.y, targetYaw, delta * 14);
 
-      // Spin wheels
-      const wheelRotation = (this.playerSpeed / 0.38) * delta;
+      // Spin wheels based on actual forward distance traveled
+      const wheelRotation = (this.playerSpeed / 0.39) * delta;
       for (const w of this.playerCar.wheels) {
         w.rotation.x -= wheelRotation;
       }
 
-      // Brake light brightening
+      // Turn front wheels realistically with steering input!
+      const targetSteerAngle = -this.steerInput * 0.42;
+      for (const knuckle of this.playerCar.frontSteerKnuckles) {
+        knuckle.rotation.y = THREE.MathUtils.lerp(knuckle.rotation.y, targetSteerAngle, delta * 14);
+      }
+
+      // Rotate interior steering wheel realistically in driver's hands!
+      const targetWheelRotation = -this.steerInput * 1.55;
+      this.playerCar.steeringWheel.rotation.z = THREE.MathUtils.lerp(
+        this.playerCar.steeringWheel.rotation.z,
+        targetWheelRotation,
+        delta * 14
+      );
+
+      // Update Live Cockpit Digital Instrument Cluster Display
+      this.playerCar.dashboardDisplay.draw(
+        Math.round(currentSpeedKmH),
+        Math.round(this.currentRpm),
+        this.currentGear,
+        this.nitroTank,
+        this.isShifting
+      );
+
+      // Taillight dynamic brake flare
       const tl = this.playerCar.taillights[0];
       if (tl && tl.material) {
         const mat = tl.material as THREE.MeshBasicMaterial;
-        mat.color.setHex(this.brakeInput > 0 ? 0xff0022 : 0xaa0022);
+        mat.color.setHex(this.brakeInput > 0 ? 0xff0033 : 0x880018);
       }
     }
 
@@ -447,8 +523,8 @@ export class GameEngine {
     // Traffic updates & collisions
     this.traffic.update(delta, this.playerX, this.playerZ, currentSpeedKmH, this.gameMode === 'GAMEOVER');
 
-    // Particle speed lines & sparks
-    this.particles.update(delta, this.playerX, this.playerZ, currentSpeedKmH, isNitroActive);
+    // Particle speed lines, tire smoke & sparks
+    this.particles.update(delta, this.playerX, this.playerZ, currentSpeedKmH, isNitroActive, this.brakeInput > 0.35);
 
     // Gear shift timer handling
     if (this.shiftTimer > 0) {
@@ -542,19 +618,29 @@ export class GameEngine {
   }
 
   private updateCamera(delta: number, isNitroActive: boolean) {
+    const speedKmH = this.playerSpeed * 3.6;
+
     if (this.cameraMode === 'CHASE') {
-      // Dynamic elastic follow camera
+      // Dynamic elastic follow camera behind vehicle
+      const speedOffset = (this.playerSpeed / 40);
       _vec3Target.set(
-        this.playerX * 0.75,
-        3.2 + (this.playerSpeed / 40) * 0.4,
-        this.playerZ + 7.2 + (this.playerSpeed / 40) * 1.2
+        this.playerX * 0.72,
+        2.75 + speedOffset * 0.35,
+        this.playerZ + 6.9 + speedOffset * 1.15
       );
 
       _vec3Look.set(
-        this.playerX * 0.35,
-        1.1,
-        this.playerZ - 30
+        this.playerX * 0.3,
+        1.15,
+        this.playerZ - 28
       );
+
+      // High-speed camera micro-shake at > 170 km/h
+      if (speedKmH > 170) {
+        const shake = (speedKmH - 170) / 180 * 0.018;
+        _vec3Target.x += (Math.random() - 0.5) * shake;
+        _vec3Target.y += (Math.random() - 0.5) * shake;
+      }
 
       this.camera.position.lerp(_vec3Target, delta * 10);
       this.camera.lookAt(_vec3Look);
@@ -565,33 +651,67 @@ export class GameEngine {
       this.camera.updateProjectionMatrix();
 
     } else if (this.cameraMode === 'COCKPIT') {
-      // First-person view inside driver cabin with steering wheel & hood in view
-      this.camera.position.set(
-        this.playerX - 0.35,
-        1.05,
-        this.playerZ - 0.05
+      // Driver's eye level inside driver bucket seat (-0.38, 1.02, 0.05)
+      // 1. Dynamic Look-to-Apex Parallax (head leans and looks toward apex when cornering)
+      const apexLeanX = -this.steerInput * 0.085;
+      const lookApexX = -this.steerInput * 0.72;
+      const apexRoll = -this.steerInput * 0.038;
+
+      // 2. Kinetic G-Force Parallax
+      const gForceZ = (this.throttleInput * 0.045) - (this.brakeInput * 0.075);
+      const gForceY = (this.throttleInput * 0.015) - (this.brakeInput * 0.035);
+
+      // 3. Subtle Interactive Look Parallax (smoothed)
+      this.pointerParallaxX = THREE.MathUtils.lerp(this.pointerParallaxX, this.targetPointerParallaxX, delta * 8);
+      this.pointerParallaxY = THREE.MathUtils.lerp(this.pointerParallaxY, this.targetPointerParallaxY, delta * 8);
+
+      // 4. Speed & Road Vibration Parallax
+      const vibScale = Math.max(0, (speedKmH - 120) / 180) * 0.007;
+      const vibX = (Math.random() - 0.5) * vibScale;
+      const vibY = (Math.random() - 0.5) * vibScale;
+
+      // Set target eye position with full 3D cabin parallax
+      _vec3Target.set(
+        this.playerX - 0.38 + apexLeanX + this.pointerParallaxX + vibX,
+        1.02 + gForceY + this.pointerParallaxY + vibY,
+        this.playerZ + 0.05 + gForceZ
       );
-      this.camera.lookAt(
-        this.playerX - 0.35,
-        1.0,
+
+      // Look straight ahead through windshield past steering wheel and over the hood
+      _vec3Look.set(
+        this.playerX - 0.38 + lookApexX + this.pointerParallaxX * 3.5,
+        0.98 + this.pointerParallaxY * 2.5,
         this.playerZ - 35
       );
-      this.camera.fov = 76;
+
+      this.camera.position.lerp(_vec3Target, delta * 22);
+      this.camera.lookAt(_vec3Look);
+
+      // Apply subtle dynamic apex roll to emphasize G-force in the cabin
+      this.camera.rotation.z += apexRoll;
+
+      // Dynamic Cockpit FOV Breathing with speed and nitro
+      const targetFov = 73 + (this.playerSpeed / 35) * 8 + (isNitroActive ? 5 : 0);
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, delta * 8);
       this.camera.updateProjectionMatrix();
 
     } else {
-      // Low bumper view for asphalt rush
-      this.camera.position.set(
+      // HOOD CAMERA: Positioned just above the sculpted front hood
+      _vec3Target.set(
         this.playerX,
-        0.48,
-        this.playerZ - 2.1
+        0.72,
+        this.playerZ - 1.25
       );
-      this.camera.lookAt(
-        this.playerX,
-        0.48,
+
+      _vec3Look.set(
+        this.playerX - this.steerInput * 0.45,
+        0.70,
         this.playerZ - 40
       );
-      this.camera.fov = 85;
+
+      this.camera.position.lerp(_vec3Target, delta * 22);
+      this.camera.lookAt(_vec3Look);
+      this.camera.fov = 80;
       this.camera.updateProjectionMatrix();
     }
   }
@@ -600,6 +720,8 @@ export class GameEngine {
     this.isDestroyed = true;
     cancelAnimationFrame(this.frameId);
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('pointermove', this.onPointerMove);
+    this.postProcessor?.dispose();
     soundManager.destroy();
     this.highway.reset();
     this.traffic.clear();

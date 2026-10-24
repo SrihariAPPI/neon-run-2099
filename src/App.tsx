@@ -115,7 +115,7 @@ export default function App() {
       engineRef.current.cycleCamera();
       let nextCam: CameraView = 'CHASE';
       if (cameraView === 'CHASE') nextCam = 'COCKPIT';
-      else if (cameraView === 'COCKPIT') nextCam = 'BUMPER';
+      else if (cameraView === 'COCKPIT') nextCam = 'HOOD';
       setCameraView(nextCam);
     }
   };

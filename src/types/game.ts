@@ -1,6 +1,6 @@
 export type GameMode = 'MENU' | 'PLAYING' | 'PAUSED' | 'GAMEOVER' | 'GARAGE';
 
-export type CameraView = 'CHASE' | 'COCKPIT' | 'BUMPER';
+export type CameraView = 'CHASE' | 'COCKPIT' | 'HOOD';
 
 export interface CarSpec {
   id: string;
