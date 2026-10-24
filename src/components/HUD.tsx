@@ -18,7 +18,7 @@ export const HUD: React.FC<HUDProps> = ({
   onPause,
   nearMisses,
 }) => {
-  const [isMuted, setIsMuted] = React.useState(false);
+  const [isMuted, setIsMuted] = React.useState(soundManager.getIsMuted());
 
   const toggleSound = () => {
     const muted = soundManager.toggleMute();

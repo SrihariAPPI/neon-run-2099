@@ -13,11 +13,18 @@ export const PauseModal: React.FC<PauseModalProps> = ({
   onRestart,
   onMenu,
 }) => {
-  const [isMuted, setIsMuted] = React.useState(false);
+  const [isMuted, setIsMuted] = React.useState(soundManager.getIsMuted());
+  const [engineVolume, setEngineVolume] = React.useState(Math.round(soundManager.getEngineVolume() * 100));
 
   const toggleSound = () => {
     const muted = soundManager.toggleMute();
     setIsMuted(muted);
+  };
+
+  const handleEngineVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = Number(e.target.value);
+    setEngineVolume(val);
+    soundManager.setEngineVolume(val / 100);
   };
 
   return (
@@ -60,6 +67,23 @@ export const PauseModal: React.FC<PauseModalProps> = ({
             {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-cyan-400" />}
             <span>{isMuted ? 'UNMUTE AUDIO' : 'MUTE AUDIO'}</span>
           </button>
+
+          {/* Dedicated Engine Volume Setting */}
+          <div className="w-full p-3 bg-slate-900/90 border border-slate-800 text-left">
+            <div className="flex items-center justify-between text-[11px] font-bold text-cyan-400 mb-1.5 uppercase tracking-wider">
+              <span>PLAYER ENGINE SOUND</span>
+              <span className="font-mono text-white">{engineVolume}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              value={engineVolume}
+              onChange={handleEngineVolumeChange}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none"
+            />
+          </div>
 
           <button
             onClick={() => {

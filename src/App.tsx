@@ -8,6 +8,7 @@ import { GarageModal } from './components/GarageModal';
 import { ResultsModal } from './components/ResultsModal';
 import { PauseModal } from './components/PauseModal';
 import { TouchControls } from './components/TouchControls';
+import { soundManager } from './game/audio';
 
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement>(null);
@@ -170,6 +171,8 @@ export default function App() {
 
   // Garage Customization Actions
   const handleSelectCar = (carId: string) => {
+    soundManager.init();
+    soundManager.previewEngineRev(carId);
     setSaveData(prev => {
       const next = { ...prev, selectedCarId: carId };
       saveGameData(next);

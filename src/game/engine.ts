@@ -231,7 +231,7 @@ export class GameEngine {
       soundManager.init();
       soundManager.startRealEngine(this.currentSpec.id);
       soundManager.startCyberpunkMusic();
-    } else if (mode === 'GAMEOVER' || mode === 'PAUSED') {
+    } else {
       soundManager.stopEngine();
     }
   }
